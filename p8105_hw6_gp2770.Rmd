@@ -1,0 +1,14 @@
+---
+title: "p8105_hw6_gp2770"
+author: "Gokul Pareek"
+date: "2024-11-19"
+output: github_document
+---
+
+I'm an R Markdown document!
+
+# Problem 1
+
+# Problem 2
+
+# Problem 3
