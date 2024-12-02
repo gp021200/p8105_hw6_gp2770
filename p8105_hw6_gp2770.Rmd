@@ -7,8 +7,280 @@ output: github_document
 
 I'm an R Markdown document!
 
+```{r}
+
+library(tidyverse)
+library(broom)
+
+```
+
 # Problem 1
+
+## Data Generation
+
+```{r}
+
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+
+```
+
+## Bootstrap Analysis
+
+```{r}
+
+set.seed(123)
+
+# Function to compute R^2 and log(beta0 * beta1)
+compute_metrics <- function(data) {
+  model <- lm(tmax ~ tmin, data = data)
+  r_squared <- glance(model)$r.squared
+  coefs <- tidy(model)
+  log_beta_product <- log(coefs$estimate[1] * coefs$estimate[2])
+  c(r_squared, log_beta_product)
+}
+
+# Perform bootstrap
+n_boot <- 5000
+bootstrap_results <- replicate(n_boot, {
+  sample_data <- weather_df %>% slice_sample(n = nrow(weather_df), replace = TRUE)
+  compute_metrics(sample_data)
+}, simplify = "matrix")
+
+# Convert to a tidy data frame
+bootstrap_df <- as.data.frame(t(bootstrap_results))
+colnames(bootstrap_df) <- c("r_squared", "log_beta_product")
+
+```
 
 # Problem 2
 
+```{r}
+
+library(purrr)
+
+```
+
+## Loading and Modifying the Data
+
+```{r}
+
+homicide_df <- read_csv("data/homicide-data.csv", na = c("", "NA", "Unknown")) %>%
+  # Clean column names for consistency
+  janitor::clean_names() %>% 
+  
+  # Combine city and state into one column
+  unite(city_state, c(city, state), sep = ", ") %>%
+  
+  # Filter out specific cities and keep only relevant races and valid ages
+  filter(
+    !city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"),
+    victim_race %in% c("White", "Black"),
+    victim_age != "Unknown"
+  ) %>%
+  
+  # Convert victim_age to numeric and create a resolved column as a binary indicator
+  mutate(
+    victim_age = as.numeric(victim_age),
+    resolved = as.numeric(disposition == "Closed by arrest"),
+    # Reorder levels in victim_race, prioritizing "White"
+    victim_race = fct_relevel(victim_race, "White")
+  ) %>%
+  
+  # Select only relevant columns for analysis
+  select(city_state, resolved, victim_age, victim_race, victim_sex)
+
+```
+
+## Logistic Regression for Baltimore, MD
+
+```{r}
+
+logistic_model <- 
+  homicide_df %>% 
+  filter(city_state == "Baltimore, MD") %>% 
+  glm(resolved ~ victim_age + victim_sex + victim_race, data = ., family = binomial())
+
+broom::tidy(logistic_model, conf.int = TRUE) %>% mutate(OR = exp(estimate), 
+                                                  conf_low = exp(conf.low), 
+                                                  conf_high = exp(conf.high)) %>% 
+  select(term, log_OR = estimate, OR, conf_low, conf_high) %>% filter(term == "victim_sexMale") %>% 
+  knitr::kable(digits = 4)
+
+```
+
+## Logistic Regression for Each of the Cities
+
+```{r}
+
+city_results <- homicide_df %>%
+  group_by(city_state) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~glm(resolved ~ victim_age + victim_sex + victim_race, data = ., family = "binomial")),
+    results = map(model, broom::tidy, conf.int = TRUE)) %>%
+  unnest(results) %>%
+  mutate(OR = exp(estimate), 
+         conf_low = exp(conf.low), conf_high = exp(conf.high)) %>% 
+  select(city_state, term, OR, conf_low, conf_high) %>%
+   filter(term == "victim_sexMale") 
+
+city_results %>% knitr::kable(digits = 4)
+
+```
+
+## Plotting
+
+```{r}
+
+city_results %>% 
+  ggplot(aes(y = reorder(city_state, OR), x = OR)) +  # Cities on y-axis, OR on x-axis
+  geom_point() +
+  geom_errorbar(aes(xmin = conf_low, xmax = conf_high)) +  # Error bars for x-axis
+  labs(
+    title = "Unsolved Homicides: Male vs. Female Victims",
+    y = "City",  # Reflects swapped axes
+    x = "Adjusted Odds Ratio"
+  ) +
+  theme(
+    axis.text.y = element_text(vjust = 0.5, margin = margin(t = 5, b = 5)),  # Adds spacing around labels
+    axis.ticks.y = element_blank(),  # Optional: hides y-axis ticks for a cleaner look
+    axis.text.x = element_text(angle = 0),  # Keeps x-axis text readable
+    plot.title = element_text(hjust = 0.5)  # Centers the title
+  )
+
+```
+
 # Problem 3
+
+## Loading and Cleaning the Data
+
+```{r}
+
+library(modelr)
+
+# Load the dataset
+birthweight_data <- read.csv("data/birthweight.csv")
+
+# Correct column name typo
+colnames(birthweight_data)[colnames(birthweight_data) == "mheigth"] <- "mheight"
+
+# Convert numeric columns to factors where appropriate
+birthweight_data <- birthweight_data %>%
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8), 
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform, levels = c(0, 1), labels = c("Absent", "Present")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4), 
+                   labels = c("White", "Black", "Asian", "Puerto Rican"))
+  )
+
+# Check for missing data
+missing_data_summary <- birthweight_data %>%
+  summarize(across(everything(), ~ sum(is.na(.))))
+
+# Display structure of the dataset to confirm changes
+glimpse(birthweight_data)
+
+```
+
+## Proposing a Regression Model for Birthweight
+
+Using hypothesized key predictors for birthweight:
+1. Mother's weight (delivery weight, pre-pregnancy BMI)
+2. Gestational age
+3. Smoking during pregnancy
+4. Baby's sex
+5. Presence of malformations
+
+```{r}
+
+# Fit a hypothesized model
+model_hypothesis <- lm(bwt ~ delwt + gaweeks + smoken + babysex + malform, data = birthweight_data)
+
+# Add predictions and residuals to the dataset
+birthweight_data <- birthweight_data %>%
+  add_predictions(model_hypothesis, var = "predicted_bwt") %>%
+  add_residuals(model_hypothesis, var = "residuals")
+
+# Plot residuals vs. fitted values
+ggplot(birthweight_data, aes(x = predicted_bwt, y = residuals)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Residuals vs. Fitted Values", x = "Fitted Values", y = "Residuals")
+
+```
+
+## Comparing Models
+
+### Model 1: Length At Birth and Gestational Age 
+
+```{r}
+
+model_length_ga <- lm(bwt ~ blength + gaweeks, data = birthweight_data)
+
+```
+
+### Model 2: Full Interaction Model
+
+```{r}
+
+model_interactions <- lm(bwt ~ bhead * blength * babysex, data = birthweight_data)
+
+```
+
+### Cross-Validation for Comparison
+
+```{r}
+
+library(purrr)
+
+cv_df <- 
+  crossv_mc(birthweight_data, 100) %>% 
+  mutate(
+    train = map(train, as_tibble), 
+    test = map(test, as_tibble)
+  ) %>% 
+  mutate(model_hypothesis = map(train, \(df) lm(bwt~ babysex + bhead + blength + delwt + gaweeks + mrace + parity + smoken, data = df)),
+    model_length_ga = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)), 
+         model_interactions = map(train, \(df) lm(bwt ~ bhead + blength + babysex + bhead*blength*babysex, data = df))) %>% 
+  mutate(
+    rmse_model_hypothesis = map2_dbl(model_hypothesis, test, \(mod, df) rmse(model = mod, data = df)), 
+    rmse_model_length_ga = map2_dbl(model_length_ga, test, \(mod, df) rmse(model = mod, data = df)), 
+    rmse_interactions = map2_dbl(model_interactions, test, \(mod, df) rmse(model = mod, data = df))
+  )
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(everything(), 
+               names_to = "model", 
+               values_to = "rmse", 
+               names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse, fill = model)) + 
+  geom_violin(trim = FALSE, color = "black") +
+  scale_fill_manual(values = c("skyblue", "lightgreen", "salmon")) + # Custom colors
+  theme_minimal() +
+  labs(title = "RMSE for Different Models",
+       x = "Model",
+       y = "RMSE") +
+  theme(legend.position = "none")
+
+```
+
+
+
+
+
+
+
